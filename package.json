@@ -1,0 +1,49 @@
+{
+  "name": "honorbot-pbz",
+  "version": "1.0.0",
+  "description": "Discord.js v14 bot with TypeScript",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "nodemon --exec ts-node src/index.ts",
+    "watch": "tsc --watch",
+    "deploy": "ts-node src/deploy-commands.ts",
+    "deploy:prod": "node dist/deploy-commands.js",
+    "clear-commands": "ts-node src/clear-commands.ts",
+    "migrate:monthly": "ts-node migrate-monthly-snapshot.ts",
+    "restore:full-march4": "ts-node scripts/restore-full-march4.ts",
+    "restore:docker": "docker compose run --rm -v $(pwd):/app -w /app -e MONGO_URI=mongodb://mongodb:27017/honorbot app npx ts-node scripts/restore-full-march4.ts",
+    "restore:4pm": "ts-node scripts/restore-from-json-backup.ts database-backups/incoming/phantom_backup_2026-03-04.json",
+    "restore:4pm:docker": "docker compose run --rm -v $(pwd):/app -w /app -e MONGO_URI=mongodb://mongodb:27017/honorbot app npx ts-node scripts/restore-from-json-backup.ts database-backups/incoming/phantom_backup_2026-03-04.json"
+  },
+  "keywords": [
+    "discord",
+    "bot",
+    "discord.js"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/multer": "^2.0.0",
+    "@types/node-cron": "^3.0.11",
+    "cors": "^2.8.5",
+    "discord.js": "^14.14.1",
+    "dotenv": "^16.3.1",
+    "express": "^5.2.1",
+    "express-basic-auth": "^1.2.1",
+    "express-rate-limit": "^7.5.1",
+    "mongoose": "^8.0.3",
+    "multer": "^2.0.2",
+    "node-cron": "^4.2.1",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.6",
+    "nodemon": "^3.0.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  }
+}

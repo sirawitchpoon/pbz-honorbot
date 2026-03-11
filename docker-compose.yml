@@ -1,0 +1,33 @@
+# MongoDB อยู่ที่ honor-points-service แล้ว — รัน honor-points-service ก่อน แล้วรัน stack นี้
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: honorbot-pbz-app:latest
+    container_name: honorbot-app
+    restart: unless-stopped
+    ports:
+      - "3012:3000"   # โฮสต์ 3012 (ไม่ใช้ 3000 เพื่อไม่ชน process อื่น)
+    environment:
+      - NODE_ENV=production
+      - MONGO_URI=mongodb://mongodb:27017/honorbot
+      - LOG_DIR=/app/logs
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/app/logs
+    command: node dist/index.js
+    networks:
+      - honor-points-network
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/api/leaderboard', (r) => {process.exit(r.statusCode === 200 || r.statusCode === 401 ? 0 : 1)})"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  honor-points-network:
+    external: true
+    name: honor-points-service_honor-points-network

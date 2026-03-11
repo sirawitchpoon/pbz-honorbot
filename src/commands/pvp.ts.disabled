@@ -1,0 +1,718 @@
+import {
+  SlashCommandBuilder,
+  EmbedBuilder,
+  ChatInputCommandInteraction,
+  ButtonInteraction,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  PermissionFlagsBits,
+  TextChannel,
+} from 'discord.js';
+import { User, IUser } from '../models/User';
+
+// Game state management
+interface PVPGame {
+  challengerId: string;
+  challengerName: string;
+  challengerPoints: number;
+  opponentId: string;
+  opponentName: string;
+  opponentPoints: number;
+  betAmount: number;
+  channelId: string;
+  round: number; // Current round (1-3)
+  challengerMove: 'rock' | 'paper' | 'scissors' | null;
+  opponentMove: 'rock' | 'paper' | 'scissors' | null;
+  challengerWins: number;
+  opponentWins: number;
+  gameMessageId: string | null;
+  timeoutHandle: NodeJS.Timeout | null;
+}
+
+// Store active PVP games: challengeMessageId -> game state
+const activeChallenges = new Map<string, PVPGame>();
+
+// Store active games in channels: channelId -> game state
+const activeGames = new Map<string, PVPGame>();
+
+const MOVE_TIMEOUT = 60000; // 60 seconds timeout for moves
+const CHANNEL_CLEANUP_DELAY = 12000; // 12 seconds before deleting channel
+
+// Helper function to get or create user
+async function getOrCreateUser(userId: string, username: string): Promise<IUser> {
+  let user = await User.findOne({ userId });
+
+  if (!user) {
+    user = await User.create({
+      userId,
+      username,
+      honorPoints: 0,
+      lastMessageDate: new Date(),
+      dailyPoints: 0,
+      lastMessagePointsReset: new Date(),
+      dailyMessageCount: 0,
+      lastDailyReset: new Date(0),
+      dailyCheckinStreak: 0,
+      lastCheckinDate: new Date(0),
+      dailyLuckyDrawCount: 0,
+      lastLuckyDrawDate: new Date(0),
+    });
+  } else {
+    if (user.username !== username) {
+      user.username = username;
+      await user.save();
+    }
+  }
+
+  return user;
+}
+
+export const data = new SlashCommandBuilder()
+  .setName('pvp')
+  .setDescription('Challenge another user to a Rock-Paper-Scissors duel')
+  .addIntegerOption((option) =>
+    option
+      .setName('bet_amount')
+      .setDescription('Optional bet amount (default: 0)')
+      .setRequired(false)
+      .setMinValue(0)
+  );
+
+export async function execute(interaction: ChatInputCommandInteraction) {
+  if (!interaction.guild) {
+    await interaction.reply({
+      content: '❌ This command can only be used in a server.',
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const betAmount = interaction.options.getInteger('bet_amount') || 0;
+
+  await interaction.deferReply();
+
+  try {
+    // Get or create challenger
+    const challengerUser = await getOrCreateUser(interaction.user.id, interaction.user.username);
+
+    // Check if challenger has enough points for the bet
+    if (betAmount > 0 && challengerUser.honorPoints < betAmount) {
+      const errorEmbed = new EmbedBuilder()
+        .setColor(0xff0000)
+        .setTitle('❌ Insufficient Honor Points')
+        .setDescription(
+          `You don't have enough honor points to bet ${betAmount} points.\n\n` +
+          `**Your current balance:** ${challengerUser.honorPoints} ⚔️\n` +
+          `**Required:** ${betAmount} ⚔️`
+        )
+        .setTimestamp();
+
+      await interaction.editReply({ embeds: [errorEmbed] });
+      return;
+    }
+
+    // Create challenge embed
+    const embed = new EmbedBuilder()
+      .setColor(0x00ff00)
+      .setTitle('⚔️ Rock-Paper-Scissors Challenge!')
+      .setDescription(
+        `**${interaction.user.username}** is looking for a challenger!\n\n` +
+        `**Bet Amount:** ${betAmount > 0 ? `${betAmount} ⚔️` : 'No bet (just for fun)'}\n\n` +
+        `Click the button below to accept this challenge!`
+      )
+      .setFooter({
+        text: 'The challenger cannot accept their own challenge',
+      })
+      .setTimestamp();
+
+    const acceptButton = new ButtonBuilder()
+      .setCustomId(`pvp_accept_${interaction.id}`)
+      .setLabel('Accept Challenge')
+      .setStyle(ButtonStyle.Success)
+      .setEmoji('✅');
+
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(acceptButton);
+
+    const challengeMessage = await interaction.editReply({ embeds: [embed], components: [row] });
+
+    // Store challenge state
+    const challengeId = `pvp_accept_${interaction.id}`;
+    activeChallenges.set(challengeId, {
+      challengerId: interaction.user.id,
+      challengerName: interaction.user.username,
+      challengerPoints: challengerUser.honorPoints,
+      opponentId: '',
+      opponentName: '',
+      opponentPoints: 0,
+      betAmount,
+      channelId: '',
+      round: 1,
+      challengerMove: null,
+      opponentMove: null,
+      challengerWins: 0,
+      opponentWins: 0,
+      gameMessageId: null,
+      timeoutHandle: null,
+    });
+
+    console.log(
+      `[PVP] Challenge created by ${interaction.user.username} (${interaction.user.id}) with bet ${betAmount}`
+    );
+  } catch (error) {
+    console.error('[PVP] Error creating challenge:', error);
+
+    const errorEmbed = new EmbedBuilder()
+      .setColor(0xff0000)
+      .setTitle('❌ Error')
+      .setDescription('An error occurred while creating the challenge. Please try again later.')
+      .setTimestamp();
+
+    await interaction.editReply({ embeds: [errorEmbed], components: [] });
+  }
+}
+
+/**
+ * Handle the accept challenge button
+ */
+export async function handleAcceptButton(interaction: ButtonInteraction): Promise<void> {
+  if (!interaction.guild) {
+    await interaction.reply({
+      content: '❌ This interaction can only be used in a server.',
+      ephemeral: true,
+    });
+    return;
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  try {
+    const challengeId = interaction.customId;
+    const game = activeChallenges.get(challengeId);
+
+    if (!game) {
+      await interaction.editReply({
+        content: '❌ This challenge has expired or doesn\'t exist.',
+      });
+      return;
+    }
+
+    // Check if challenger is trying to accept their own challenge
+    if (interaction.user.id === game.challengerId) {
+      await interaction.editReply({
+        content: '❌ You cannot accept your own challenge!',
+      });
+      return;
+    }
+
+    // Get or create opponent
+    const opponentUser = await getOrCreateUser(interaction.user.id, interaction.user.username);
+
+    // Check if opponent has enough points
+    if (game.betAmount > 0 && opponentUser.honorPoints < game.betAmount) {
+      await interaction.editReply({
+        content: `❌ You don't have enough honor points to accept this challenge.\n\n**Your balance:** ${opponentUser.honorPoints} ⚔️\n**Required:** ${game.betAmount} ⚔️`,
+      });
+      return;
+    }
+
+    // Check if challenger still has enough points (in case they lost points since challenge)
+    const challengerUser = await User.findOne({ userId: game.challengerId });
+    if (!challengerUser || (game.betAmount > 0 && challengerUser.honorPoints < game.betAmount)) {
+      await interaction.editReply({
+        content: '❌ The challenger no longer has enough honor points for this bet.',
+      });
+      activeChallenges.delete(challengeId);
+      return;
+    }
+
+    // Remove from active challenges
+    activeChallenges.delete(challengeId);
+
+    // Update game state
+    game.opponentId = interaction.user.id;
+    game.opponentName = interaction.user.username;
+    game.opponentPoints = opponentUser.honorPoints;
+    game.challengerPoints = challengerUser.honorPoints;
+
+    // Disable the button on the original message
+    try {
+      await interaction.message.edit({
+        components: [],
+      });
+    } catch (editError) {
+      console.warn('[PVP] Could not disable button on challenge message:', editError);
+    }
+
+    await interaction.editReply({
+      content: '✅ Challenge accepted! Creating the arena...',
+    });
+
+    // Phase 2: Create temporary channel
+    await createArenaAndStartGame(interaction, game);
+  } catch (error) {
+    console.error('[PVP] Error accepting challenge:', error);
+
+    await interaction.editReply({
+      content: '❌ An error occurred while accepting the challenge. Please try again later.',
+    });
+  }
+}
+
+/**
+ * Phase 2: Create temporary channel and start the game
+ */
+async function createArenaAndStartGame(
+  interaction: ButtonInteraction,
+  game: PVPGame
+): Promise<void> {
+  if (!interaction.guild) return;
+
+  try {
+    // Create temporary channel name
+    const challengerName = game.challengerName.substring(0, 15).replace(/\s+/g, '-');
+    const opponentName = game.opponentName.substring(0, 15).replace(/\s+/g, '-');
+    const channelName = `pvp-${challengerName}-vs-${opponentName}`.toLowerCase();
+
+    // Get category of current channel (if any)
+    const currentChannel = interaction.channel as TextChannel;
+    const parent = currentChannel.parent;
+
+    // Create channel with permissions
+    const channel = await interaction.guild.channels.create({
+      name: channelName,
+      type: 0, // Text channel
+      parent: parent?.id || undefined,
+      permissionOverwrites: [
+        {
+          id: interaction.guild.roles.everyone.id,
+          deny: [PermissionFlagsBits.ViewChannel],
+        },
+        {
+          id: interaction.client.user!.id,
+          allow: [
+            PermissionFlagsBits.ViewChannel,
+            PermissionFlagsBits.SendMessages,
+            PermissionFlagsBits.ManageMessages,
+          ],
+        },
+        {
+          id: game.challengerId,
+          allow: [
+            PermissionFlagsBits.ViewChannel,
+            PermissionFlagsBits.SendMessages,
+            PermissionFlagsBits.ReadMessageHistory,
+          ],
+        },
+        {
+          id: game.opponentId,
+          allow: [
+            PermissionFlagsBits.ViewChannel,
+            PermissionFlagsBits.SendMessages,
+            PermissionFlagsBits.ReadMessageHistory,
+          ],
+        },
+      ],
+    });
+
+    game.channelId = channel.id;
+    activeGames.set(channel.id, game);
+
+    // Send notification
+    const arenaEmbed = new EmbedBuilder()
+      .setColor(0x00ff00)
+      .setTitle('⚔️ Arena Created!')
+      .setDescription(
+        `Welcome to the arena, ${interaction.client.users.cache.get(game.challengerId)?.toString()} and ${interaction.client.users.cache.get(game.opponentId)?.toString()}!\n\n` +
+        `**Game Mode:** Best of 3 (Rock-Paper-Scissors)\n` +
+        `${game.betAmount > 0 ? `**Bet:** ${game.betAmount} ⚔️ each\n` : '**Bet:** None (just for fun)\n'}` +
+        `**Winner takes all!**\n\n` +
+        `Get ready to make your moves!`
+      )
+      .setTimestamp();
+
+    await channel.send({ embeds: [arenaEmbed] });
+
+    // Phase 3: Start the game
+    await startNewRound(channel, game);
+  } catch (error) {
+    console.error('[PVP] Error creating arena:', error);
+
+    // Try to notify in original channel
+    try {
+      if (interaction.channel && 'send' in interaction.channel && interaction.channel.isTextBased()) {
+        await interaction.channel.send({
+          content: `❌ An error occurred while creating the arena. Please try again later.`,
+        });
+      }
+    } catch (sendError) {
+      // Ignore
+    }
+  }
+}
+
+/**
+ * Phase 3: Start a new round of Rock-Paper-Scissors
+ */
+async function startNewRound(channel: TextChannel, game: PVPGame): Promise<void> {
+  try {
+    // Reset moves for new round
+    game.challengerMove = null;
+    game.opponentMove = null;
+
+    // Clear any existing timeout
+    if (game.timeoutHandle) {
+      clearTimeout(game.timeoutHandle);
+      game.timeoutHandle = null;
+    }
+
+    // Update game message if exists
+    const roundEmbed = new EmbedBuilder()
+      .setColor(0x0099ff)
+      .setTitle(`Round ${game.round} - Choose Your Move!`)
+      .setDescription(
+        `**${game.challengerName}** vs **${game.opponentName}**\n\n` +
+        `**Current Score:**\n` +
+        `• ${game.challengerName}: ${game.challengerWins} wins\n` +
+        `• ${game.opponentName}: ${game.opponentWins} wins\n\n` +
+        `Click your move below! You have 60 seconds to choose.`
+      )
+      .setFooter({
+        text: `Round ${game.round} of 3`,
+      })
+      .setTimestamp();
+
+    const rockButton = new ButtonBuilder()
+      .setCustomId(`pvp_move_rock_${game.channelId}`)
+      .setLabel('Rock')
+      .setStyle(ButtonStyle.Primary)
+      .setEmoji('✊');
+
+    const paperButton = new ButtonBuilder()
+      .setCustomId(`pvp_move_paper_${game.channelId}`)
+      .setLabel('Paper')
+      .setStyle(ButtonStyle.Primary)
+      .setEmoji('🖐');
+
+    const scissorsButton = new ButtonBuilder()
+      .setCustomId(`pvp_move_scissors_${game.channelId}`)
+      .setLabel('Scissors')
+      .setStyle(ButtonStyle.Primary)
+      .setEmoji('✌');
+
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      rockButton,
+      paperButton,
+      scissorsButton
+    );
+
+    // Send or update game message
+    if (game.gameMessageId) {
+      try {
+        const gameMessage = await channel.messages.fetch(game.gameMessageId);
+        await gameMessage.edit({ embeds: [roundEmbed], components: [row] });
+      } catch (fetchError) {
+        // Message might be deleted, create new one
+        const newMessage = await channel.send({ embeds: [roundEmbed], components: [row] });
+        game.gameMessageId = newMessage.id;
+      }
+    } else {
+      const gameMessage = await channel.send({ embeds: [roundEmbed], components: [row] });
+      game.gameMessageId = gameMessage.id;
+    }
+
+    // Set timeout for moves
+    game.timeoutHandle = setTimeout(async () => {
+      await handleRoundTimeout(channel, game);
+    }, MOVE_TIMEOUT);
+  } catch (error) {
+    console.error('[PVP] Error starting round:', error);
+  }
+}
+
+/**
+ * Handle move button click
+ */
+export async function handleMoveButton(interaction: ButtonInteraction): Promise<void> {
+  if (!interaction.guild || !interaction.channel) {
+    await interaction.reply({
+      content: '❌ This interaction can only be used in the arena channel.',
+      ephemeral: true,
+    });
+    return;
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  try {
+    const game = activeGames.get(interaction.channel.id);
+
+    if (!game) {
+      await interaction.editReply({
+        content: '❌ No active game found in this channel.',
+      });
+      return;
+    }
+
+    // Check if user is part of this game
+    if (interaction.user.id !== game.challengerId && interaction.user.id !== game.opponentId) {
+      await interaction.editReply({
+        content: '❌ You are not part of this game.',
+      });
+      return;
+    }
+
+    // Extract move from customId (format: pvp_move_rock_channelId)
+    const moveMatch = interaction.customId.match(/^pvp_move_(rock|paper|scissors)_/);
+    if (!moveMatch) {
+      await interaction.editReply({
+        content: '❌ Invalid move button.',
+      });
+      return;
+    }
+
+    const move = moveMatch[1] as 'rock' | 'paper' | 'scissors';
+
+    // Set move
+    if (interaction.user.id === game.challengerId) {
+      if (game.challengerMove) {
+        await interaction.editReply({
+          content: '⚠️ You have already made your move for this round.',
+        });
+        return;
+      }
+      game.challengerMove = move;
+    } else {
+      if (game.opponentMove) {
+        await interaction.editReply({
+          content: '⚠️ You have already made your move for this round.',
+        });
+        return;
+      }
+      game.opponentMove = move;
+    }
+
+    await interaction.editReply({
+      content: `✅ You selected **${move === 'rock' ? '✊ Rock' : move === 'paper' ? '🖐 Paper' : '✌ Scissors'}**! Waiting for opponent...`,
+    });
+
+    // Check if both players have made their moves
+    if (game.challengerMove && game.opponentMove) {
+      // Clear timeout
+      if (game.timeoutHandle) {
+        clearTimeout(game.timeoutHandle);
+        game.timeoutHandle = null;
+      }
+
+      // Process round result
+      await processRoundResult(interaction.channel as TextChannel, game);
+    }
+  } catch (error) {
+    console.error('[PVP] Error handling move:', error);
+
+    await interaction.editReply({
+      content: '❌ An error occurred while processing your move.',
+    });
+  }
+}
+
+/**
+ * Process the result of a round
+ */
+async function processRoundResult(channel: TextChannel, game: PVPGame): Promise<void> {
+  if (!game.challengerMove || !game.opponentMove) return;
+
+  // Determine winner
+  const challengerMove = game.challengerMove;
+  const opponentMove = game.opponentMove;
+
+  let roundWinner: 'challenger' | 'opponent' | 'tie' = 'tie';
+
+  if (challengerMove === opponentMove) {
+    roundWinner = 'tie';
+  } else if (
+    (challengerMove === 'rock' && opponentMove === 'scissors') ||
+    (challengerMove === 'paper' && opponentMove === 'rock') ||
+    (challengerMove === 'scissors' && opponentMove === 'paper')
+  ) {
+    roundWinner = 'challenger';
+    game.challengerWins += 1;
+  } else {
+    roundWinner = 'opponent';
+    game.opponentWins += 1;
+  }
+
+  // Send round result
+  const resultEmbed = new EmbedBuilder()
+    .setColor(roundWinner === 'tie' ? 0xffff00 : roundWinner === 'challenger' ? 0x00ff00 : 0xff0000)
+    .setTitle(`Round ${game.round} Result`)
+    .setDescription(
+      `**${game.challengerName}** chose **${challengerMove === 'rock' ? '✊ Rock' : challengerMove === 'paper' ? '🖐 Paper' : '✌ Scissors'}**\n` +
+      `**${game.opponentName}** chose **${opponentMove === 'rock' ? '✊ Rock' : opponentMove === 'paper' ? '🖐 Paper' : '✌ Scissors'}**\n\n` +
+      `**Result:** ${roundWinner === 'tie' ? '⚖️ Tie! (No points awarded)' : roundWinner === 'challenger' ? `🏆 ${game.challengerName} wins!` : `🏆 ${game.opponentName} wins!`}\n\n` +
+      `**Score:**\n` +
+      `• ${game.challengerName}: ${game.challengerWins} wins\n` +
+      `• ${game.opponentName}: ${game.opponentWins} wins`
+    )
+    .setTimestamp();
+
+  await channel.send({ embeds: [resultEmbed] });
+
+  // Check if game is over (best of 3: need 2 wins)
+  if (game.challengerWins >= 2 || game.opponentWins >= 2) {
+    await endGame(channel, game);
+  } else {
+    // Continue to next round
+    game.round += 1;
+    await new Promise((resolve) => setTimeout(resolve, 3000)); // 3 second delay
+    await startNewRound(channel, game);
+  }
+}
+
+/**
+ * Handle timeout when a player doesn't make a move
+ */
+async function handleRoundTimeout(channel: TextChannel, game: PVPGame): Promise<void> {
+  // Determine who didn't make a move
+  if (!game.challengerMove && !game.opponentMove) {
+    // Both didn't make a move - end game
+    await channel.send({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(0xff0000)
+          .setTitle('⏱️ Game Timeout')
+          .setDescription('Both players failed to make a move in time. The game has been cancelled.')
+          .setTimestamp(),
+      ],
+    });
+    await cleanupGame(channel, game);
+    return;
+  }
+
+  const forfeiter = !game.challengerMove ? game.challengerName : game.opponentName;
+  const winner = !game.challengerMove ? game.opponentName : game.challengerName;
+
+  if (!game.challengerMove) {
+    game.opponentWins = 2; // Instant win
+  } else {
+    game.challengerWins = 2; // Instant win
+  }
+
+  await channel.send({
+    embeds: [
+      new EmbedBuilder()
+        .setColor(0xff0000)
+        .setTitle('⏱️ Timeout')
+        .setDescription(`${forfeiter} failed to make a move in time. **${winner}** wins by forfeit!`)
+        .setTimestamp(),
+    ],
+  });
+
+  await endGame(channel, game);
+}
+
+/**
+ * Phase 4: End the game, transfer points, and cleanup
+ */
+async function endGame(channel: TextChannel, game: PVPGame): Promise<void> {
+  try {
+    const winnerIsChallenger = game.challengerWins >= 2;
+    const winnerId = winnerIsChallenger ? game.challengerId : game.opponentId;
+    const winnerName = winnerIsChallenger ? game.challengerName : game.opponentName;
+    const loserId = winnerIsChallenger ? game.opponentId : game.challengerId;
+    const loserName = winnerIsChallenger ? game.opponentName : game.challengerName;
+
+    // Transfer points if there's a bet
+    if (game.betAmount > 0) {
+      try {
+        const winner = await User.findOne({ userId: winnerId });
+        const loser = await User.findOne({ userId: loserId });
+
+        if (winner && loser) {
+          // Deduct from loser
+          loser.honorPoints -= game.betAmount;
+          await loser.save();
+
+          // Add to winner (double the bet amount = bet from each player)
+          winner.honorPoints += game.betAmount * 2;
+          await winner.save();
+
+          console.log(
+            `[PVP] Point transfer: ${loserName} (${loserId}) -> ${winnerName} (${winnerId}): ${game.betAmount * 2} points`
+          );
+        }
+      } catch (transferError) {
+        console.error('[PVP] Error transferring points:', transferError);
+      }
+    }
+
+    // Send final result
+    const finalEmbed = new EmbedBuilder()
+      .setColor(0x00ff00)
+      .setTitle('🏆 Game Over!')
+      .setDescription(
+        `**${winnerName}** wins the match!\n\n` +
+        `**Final Score:**\n` +
+        `• ${game.challengerName}: ${game.challengerWins} wins\n` +
+        `• ${game.opponentName}: ${game.opponentWins} wins\n\n` +
+        `${game.betAmount > 0 ? `**${winnerName}** won **${game.betAmount * 2}** honor points! 🎉` : 'Well played!'}`
+      )
+      .setTimestamp();
+
+    await channel.send({ embeds: [finalEmbed] });
+
+    // Disable buttons on game message
+    if (game.gameMessageId) {
+      try {
+        const gameMessage = await channel.messages.fetch(game.gameMessageId);
+        await gameMessage.edit({ components: [] });
+      } catch (fetchError) {
+        // Ignore
+      }
+    }
+
+    // Cleanup after delay
+    await cleanupGame(channel, game);
+  } catch (error) {
+    console.error('[PVP] Error ending game:', error);
+    // Still try to cleanup
+    await cleanupGame(channel, game);
+  }
+}
+
+/**
+ * Cleanup: Delete channel and remove game state
+ */
+async function cleanupGame(channel: TextChannel, game: PVPGame): Promise<void> {
+  try {
+    // Clear timeout if exists
+    if (game.timeoutHandle) {
+      clearTimeout(game.timeoutHandle);
+    }
+
+    // Remove from active games
+    activeGames.delete(game.channelId);
+
+    // Delete channel after delay
+    setTimeout(async () => {
+      try {
+        await channel.delete();
+        console.log(`[PVP] Deleted arena channel: ${channel.id}`);
+      } catch (deleteError) {
+        console.error('[PVP] Error deleting channel:', deleteError);
+      }
+    }, CHANNEL_CLEANUP_DELAY);
+
+    // Send cleanup message
+    await channel.send({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(0x888888)
+          .setDescription(`This channel will be deleted in ${CHANNEL_CLEANUP_DELAY / 1000} seconds...`)
+          .setTimestamp(),
+      ],
+    });
+  } catch (error) {
+    console.error('[PVP] Error during cleanup:', error);
+  }
+}
