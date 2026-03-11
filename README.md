@@ -1,11 +1,22 @@
-# Honorbot PBZ
-
-> **Main Honor Points Discord bot for the Phantom Blade Zero community.**  
-> Button-based interactions: daily check-in, leaderboard, gambling, status log, and admin backup.
+<p align="center">
+  <strong>Honorbot PBZ</strong>
+</p>
+<p align="center">
+  <em>Main Honor Points Discord bot for the Phantom Blade Zero community.</em>
+</p>
+<p align="center">
+  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-%3E%3D18-brightgreen?logo=node.js" alt="Node" /></a>
+  <a href="https://discord.js.org"><img src="https://img.shields.io/badge/Discord.js-v14-5865F2?logo=discord" alt="Discord.js" /></a>
+  <a href="https://www.typescriptlang.org"><img src="https://img.shields.io/badge/TypeScript-5.x-blue?logo=typescript" alt="TypeScript" /></a>
+  <img src="https://img.shields.io/badge/license-ISC-green" alt="License" />
+  <img src="https://img.shields.io/badge/Phantom%20Blade%20Zero-PBZ%20Ecosystem-8b0000" alt="PBZ" />
+</p>
 
 ---
 
-## Overview
+Button-based interactions: daily check-in, leaderboard, gambling, status log, and admin backup. All regular user interaction uses **persistent buttons** in dedicated channels; slash commands are admin-only.
+
+## 📋 Overview
 
 | | |
 |---|---|
@@ -13,11 +24,9 @@
 | **Role** | Primary user-facing Honor Points bot |
 | **Stack** | TypeScript, Discord.js v14, Express.js (admin dashboard), MongoDB |
 
-All regular user interaction uses **persistent buttons** in dedicated channels. Slash commands are admin-only (e.g. backup). Integrates with **honor-points-service** for MongoDB and optional central API.
-
 ---
 
-## Features
+## ✨ Features
 
 ### User (buttons)
 
@@ -44,12 +53,12 @@ All regular user interaction uses **persistent buttons** in dedicated channels. 
 
 ---
 
-## Quick Start
+## 🚀 Quick Start
 
 ```bash
 cp .env.example .env   # Set DISCORD_*, MONGO_URI, all channel IDs, WEB_PASS
 npm install && npm run build
-npm run deploy         # Register slash commands
+npm run deploy          # Register slash commands
 npm start
 ```
 
@@ -63,7 +72,7 @@ docker compose exec app npm run deploy
 
 ---
 
-## Environment (main)
+## ⚙️ Environment
 
 | Variable | Required | Description |
 |----------|----------|--------------|
@@ -79,7 +88,7 @@ See in-repo docs for full list and optional flags.
 
 ---
 
-## Project Structure
+## 📁 Project Structure
 
 ```
 honorbot-pbz/
@@ -94,6 +103,6 @@ honorbot-pbz/
 
 ---
 
-## License
+## 📄 License
 
-ISC
+ISC · Part of the **Phantom Blade Zero** community ecosystem.
