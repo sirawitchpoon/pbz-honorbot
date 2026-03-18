@@ -42,7 +42,16 @@ export function sendBotsLog(payload: BotsLogPayload): void {
       'X-API-Key': LOGGER_API_KEY,
     },
     body,
-  }).catch((err) => {
-    console.error('[BotsLogger] Failed to send log:', err);
-  });
+  })
+    .then(async (res) => {
+      if (!res.ok) {
+        const text = await res.text();
+        console.error(
+          `[BotsLogger] API returned ${res.status} for ${payload.action} (${payload.userId}): ${text.slice(0, 200)}`
+        );
+      }
+    })
+    .catch((err) => {
+      console.error('[BotsLogger] Failed to send log (is Logger API up?):', err.message || err);
+    });
 }

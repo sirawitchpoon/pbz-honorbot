@@ -61,6 +61,8 @@ client.once('ready', async () => {
   serviceRegistry.setLeaderboardService(leaderboardService);
   console.log('[Index] StatusLogService initialization called.');
   console.log('[Index] LeaderboardService registered in ServiceRegistry.');
+  const { isBotsLoggerEnabled } = await import('./utils/botsLogger');
+  console.log('[Index] BotsLogger (discord-bots-logger):', isBotsLoggerEnabled() ? 'enabled — action logs will sync to Google Sheet' : 'DISABLED — set BOTS_LOGGER_URL and BOTS_LOGGER_API_KEY to sync');
 
   // Scheduled backup (ทุกชั่วโมง) ทำโดย honor-points-service เท่านั้น — ไม่รัน BackupScheduler ที่นี่
   // BACKUP_DATABASE_CHANNEL_ID ยังใช้กับคำสั่ง /backup export (ส่งเมื่อ admin กด export เอง)
