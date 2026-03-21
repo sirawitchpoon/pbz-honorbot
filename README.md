@@ -103,6 +103,12 @@ honorbot-pbz/
 
 ---
 
+## 🔗 Ecosystem
+
+**Shadow Duel** ([`wuxia-bobozan`](../wuxia-bobozan)) uses the same MongoDB / Honor API for optional duel rewards; ladder honor totals there are separate from the main Honorbot UX unless synced by design. Full map: [`docs/README.md`](../docs/README.md).
+
+---
+
 ## 📄 License
 
 ISC · Part of the **Phantom Blade Zero** community ecosystem.
