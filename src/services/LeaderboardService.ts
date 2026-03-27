@@ -1,12 +1,11 @@
 import * as cron from 'node-cron';
-import { Client, TextChannel, EmbedBuilder, Message, Collection, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageComponent, AttachmentBuilder } from 'discord.js';
+import { Client, TextChannel, EmbedBuilder, Message, Collection, AttachmentBuilder } from 'discord.js';
 import { User } from '../models/User';
 
 export class LeaderboardService {
   private cronJob: cron.ScheduledTask | null = null;
   private monthlyCronJob: cron.ScheduledTask | null = null;
   private lastMessageId: string | null = null;
-  private dailyButtonMessageId: string | null = null;
   private client: Client | null = null;
 
   /**
@@ -45,10 +44,6 @@ export class LeaderboardService {
           console.error('[LeaderboardService] Error stack:', error.stack);
         }
       });
-      // Send/update daily button embed
-      this.ensureDailyButton(client).catch((error) => {
-        console.error('[LeaderboardService] ❌ Error in initial daily button setup:', error);
-      });
     } else {
       console.log('[LeaderboardService] Client not ready yet, will wait for ready event...');
       client.once('ready', () => {
@@ -59,10 +54,6 @@ export class LeaderboardService {
             console.error('[LeaderboardService] Error message:', error.message);
             console.error('[LeaderboardService] Error stack:', error.stack);
           }
-        });
-        // Send/update daily button embed
-        this.ensureDailyButton(client).catch((error) => {
-          console.error('[LeaderboardService] ❌ Error in initial daily button setup:', error);
         });
       });
     }
@@ -533,149 +524,6 @@ export class LeaderboardService {
         console.error('[LeaderboardService] Error stack:', error.stack);
       }
       throw error; // Re-throw to be caught by caller
-    }
-  }
-
-  /**
-   * Ensure the daily button embed exists in the daily checking channel
-   */
-  private async ensureDailyButton(client: Client): Promise<void> {
-    const channelId = process.env.DAILYCHECKING_CHANNEL_ID;
-
-    if (!channelId) {
-      console.warn('[LeaderboardService] DAILYCHECKING_CHANNEL_ID not set, skipping daily button setup.');
-      console.warn('[LeaderboardService] Set DAILYCHECKING_CHANNEL_ID in your .env file to enable the daily button.');
-      return;
-    }
-
-    // Validate channel ID is a valid snowflake
-    if (!/^\d{17,19}$/.test(channelId)) {
-      console.error(`[LeaderboardService] ❌ Invalid DAILYCHECKING_CHANNEL_ID format: "${channelId}"`);
-      console.error('[LeaderboardService] Must be a valid Discord snowflake (17-19 digit number).');
-      return;
-    }
-
-    if (!client.isReady()) {
-      console.warn('[LeaderboardService] Client is not ready yet, skipping daily button setup.');
-      return;
-    }
-
-    try {
-      const channel = await client.channels.fetch(channelId);
-
-      if (!channel || !channel.isTextBased()) {
-        console.error(`[LeaderboardService] ❌ Channel ${channelId} not found or not text-based.`);
-        return;
-      }
-
-      const textChannel = channel as TextChannel;
-
-      // Check if bot has permission to send messages
-      const botMember = await textChannel.guild.members.fetch(client.user!.id);
-      const permissions = textChannel.permissionsFor(botMember);
-
-      if (!permissions || !permissions.has('SendMessages') || !permissions.has('ViewChannel')) {
-        console.error(`[LeaderboardService] ❌ Bot lacks required permissions in daily checking channel ${channelId}.`);
-        console.error(`[LeaderboardService] Required: SendMessages=${permissions?.has('SendMessages')}, ViewChannel=${permissions?.has('ViewChannel')}`);
-        return;
-      }
-
-      // Create the embed
-      const embed = new EmbedBuilder()
-        .setColor(0x8b0000)
-        .setTitle('🧘 Daily Checking')
-        .setDescription('Click the button below to claim your daily honor points reward!\n\nYou can earn **1-10 random honor points** each day.')
-        .setFooter({
-          text: 'Claim your reward once per day to continue your cultivation journey!',
-        })
-        .setTimestamp();
-
-      // Create the button
-      const button = new ButtonBuilder()
-        .setCustomId('daily_claim_button')
-        .setLabel('Claim Daily')
-        .setStyle(ButtonStyle.Primary)
-        .setEmoji('⚔️');
-
-      const row = new ActionRowBuilder<ButtonBuilder>().addComponents(button);
-
-      // Try to find existing daily button message
-      let dailyButtonMessage: Message | null = null;
-
-      if (this.dailyButtonMessageId) {
-        try {
-          const storedMessage = await textChannel.messages.fetch(this.dailyButtonMessageId);
-          if (storedMessage && storedMessage.author.id === client.user?.id) {
-            dailyButtonMessage = storedMessage;
-            console.log(`[LeaderboardService] ✓ Found existing daily button message: ${this.dailyButtonMessageId}`);
-          } else {
-            this.dailyButtonMessageId = null;
-          }
-        } catch (fetchError: any) {
-          if (fetchError.code === 10008 || fetchError.code === 404) {
-            console.log(`[LeaderboardService] Stored daily button message ID ${this.dailyButtonMessageId} was deleted, clearing...`);
-            this.dailyButtonMessageId = null;
-          }
-        }
-      }
-
-      // If not found, search for it
-      if (!dailyButtonMessage) {
-        console.log('[LeaderboardService] Searching for existing daily button message...');
-        const messages = await textChannel.messages.fetch({ limit: 50 });
-
-        for (const [id, msg] of messages) {
-          if (msg.author.id === client.user?.id && msg.components.length > 0) {
-            // Check if this message has our button
-            const hasDailyButton = msg.components.some(row => {
-              const components = (row as any).components;
-              if (components && Array.isArray(components)) {
-                return components.some((component: any) => {
-                  return component.type === 2 && component.customId === 'daily_claim_button';
-                });
-              }
-              return false;
-            });
-            if (hasDailyButton) {
-              dailyButtonMessage = msg;
-              this.dailyButtonMessageId = id;
-              console.log(`[LeaderboardService] ✓ Found daily button message: ${id}`);
-              break;
-            }
-          }
-        }
-      }
-
-      if (dailyButtonMessage) {
-        // Edit existing message
-        try {
-          await dailyButtonMessage.edit({ embeds: [embed], components: [row] });
-          console.log('[LeaderboardService] ✓ Daily button message updated successfully');
-        } catch (error) {
-          console.error('[LeaderboardService] ❌ Error editing daily button message:', error);
-          // If editing fails, try to send a new one
-          this.dailyButtonMessageId = null;
-          dailyButtonMessage = null;
-        }
-      }
-
-      if (!dailyButtonMessage) {
-        // Send new message
-        try {
-          const newMessage = await textChannel.send({ embeds: [embed], components: [row] });
-          this.dailyButtonMessageId = newMessage.id;
-          console.log('[LeaderboardService] ✓ Daily button message sent successfully');
-          console.log(`[LeaderboardService] Stored daily button message ID: ${this.dailyButtonMessageId}`);
-        } catch (error) {
-          console.error('[LeaderboardService] ❌ Error sending daily button message:', error);
-        }
-      }
-    } catch (error) {
-      console.error('[LeaderboardService] ❌ Critical error setting up daily button:', error);
-      if (error instanceof Error) {
-        console.error('[LeaderboardService] Error message:', error.message);
-        console.error('[LeaderboardService] Error stack:', error.stack);
-      }
     }
   }
 

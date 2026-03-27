@@ -1,16 +1,11 @@
-import { Events, Interaction, ButtonInteraction, EmbedBuilder, MessageFlags, ChatInputCommandInteraction, PermissionFlagsBits, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder } from 'discord.js';
+import { Events, Interaction, ButtonInteraction, EmbedBuilder, MessageFlags, PermissionFlagsBits, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder } from 'discord.js';
 import * as dailyCommand from '../commands/daily';
 import { getWeightedRandomDailyPoints } from '../commands/daily';
 import * as profileCommand from '../commands/profile';
 import * as leaderboardCommand from '../commands/leaderboard';
 import * as backupCommand from '../commands/backup';
-// /reset database removed to prevent accidental data loss
 import * as statusCommand from '../commands/status';
 import * as gambleCommand from '../commands/gamble';
-// PVP system temporarily disabled
-// import * as pvpCommand from '../commands/pvp';
-// TODO: Lucky Draw feature postponed - will be implemented in future update alongside PvP Rock-Paper-Scissors
-// import { LuckyDrawService } from '../services/LuckyDrawService';
 import { User } from '../models/User';
 import mongoose from 'mongoose';
 import { MONGODB_CONNECTED } from '../utils/connectDB';
@@ -38,22 +33,14 @@ export async function execute(interaction: Interaction): Promise<void> {
       await handleGambleButton(interaction);
       return;
     }
-    // TODO: Lucky Draw feature postponed - will be implemented in future update alongside PvP Rock-Paper-Scissors
-    // if (interaction.customId === 'luckydraw_claim_button') {
-    //   await LuckyDrawService.handleLuckyDrawButton(interaction);
-    //   return;
-    // }
-    // PVP system temporarily disabled
-    // // Handle PVP accept challenge button
-    // if (interaction.customId.startsWith('pvp_accept_')) {
-    //   await pvpCommand.handleAcceptButton(interaction);
-    //   return;
-    // }
-    // // Handle PVP move buttons (rock, paper, scissors)
-    // if (interaction.customId.startsWith('pvp_move_')) {
-    //   await pvpCommand.handleMoveButton(interaction);
-    //   return;
-    // }
+    if (interaction.customId === 'manual_button') {
+      await handleManualButton(interaction);
+      return;
+    }
+    if (interaction.customId === 'status_log_button') {
+      await handleStatusLogButton(interaction);
+      return;
+    }
   }
 
   // Handle modal submissions (for coin flip)
@@ -372,6 +359,131 @@ async function handleStatusButton(interaction: ButtonInteraction): Promise<void>
   } as any;
   
   await statusCommand.execute(fakeInteraction);
+}
+
+/**
+ * Handle the manual button interaction — show the full manual as ephemeral
+ */
+async function handleManualButton(interaction: ButtonInteraction): Promise<void> {
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  sendBotsLog({
+    botId: 'honorbot-pbz',
+    category: 'manual',
+    action: 'view_manual',
+    userId: interaction.user.id,
+    username: interaction.user.username,
+  });
+
+  const statusChannelMention = process.env.STATUS_CHANNEL_ID ? `<#${process.env.STATUS_CHANNEL_ID}>` : '#honor-status';
+  const leaderboardMention = process.env.LEADERBOARD_CHANNEL_ID ? `<#${process.env.LEADERBOARD_CHANNEL_ID}>` : '#honor-leaderboard';
+
+  const embed = new EmbedBuilder()
+    .setColor(0x8b0000)
+    .setTitle('📖 Manual')
+    .setDescription('**Welcome to HonorBot PBZ!**\n\nLearn how to use all the features and earn honor points in the Jianghu.')
+    .addFields(
+      {
+        name: '⚔️ Daily Check-in',
+        value:
+          'Click the **"Claim Daily"** button to claim your daily honor points reward!\n\n' +
+          '• Earn **1-10 random honor points** each day\n' +
+          '• Available once per day (resets at midnight UTC)\n' +
+          '• Weighted probability favors lower points',
+        inline: false,
+      },
+      {
+        name: '💬 Chat Activity - Message Points System',
+        value:
+          'Earn **10 honor points** once per day from chatting.\n\n' +
+          '**Rules:**\n' +
+          '• **1 message per day** = **10 points** (fixed)\n' +
+          '• Daily limit: **1 time per day** (resets at **midnight UTC+7**)\n' +
+          '• Bot messages are ignored\n' +
+          '• Use **Tasks** button to check your daily quota\n' +
+          `• Check ${statusChannelMention} for the point distribution log`,
+        inline: false,
+      },
+      {
+        name: '🪪 View Profile',
+        value:
+          'Click the **"Profile"** button to see:\n\n' +
+          '• Your honor points and global rank\n' +
+          '• Daily message progress (Current: X / Max: 1)\n' +
+          '• Today\'s message points earned (0 or 10)\n' +
+          '• Daily check-in availability\n' +
+          '• Join date',
+        inline: false,
+      },
+      {
+        name: '📋 Today\'s Tasks',
+        value:
+          'Click the **"Tasks"** button to see:\n\n' +
+          '• Current honor points\n' +
+          '• Daily message quota\n' +
+          '• Whether you\'ve claimed today\'s chat reward\n' +
+          '• Daily check-in availability\n' +
+          '• What tasks you still have remaining today',
+        inline: false,
+      },
+      {
+        name: '📊 Status Log',
+        value:
+          'Click the **"Status Log"** button or check ' + statusChannelMention + ' to see:\n\n' +
+          '• Last 10 point distributions\n' +
+          '• Real-time updates as users earn points',
+        inline: false,
+      },
+      {
+        name: '🏆 Hall of Fame (Leaderboard)',
+        value:
+          `Check ${leaderboardMention} to see the **live leaderboard** that updates daily!\n\n` +
+          '• Top 10 warriors with rankings\n' +
+          '• Medal emojis for top 3 (🥇🥈🥉)\n' +
+          '• All-time and monthly rankings',
+        inline: false,
+      },
+      {
+        name: '🎰 Coin Flip Game',
+        value:
+          'Click the **"Coin Flip"** button to play!\n\n' +
+          '**How to Play:**\n' +
+          '1. Click the button\n' +
+          '2. Choose "heads" or "tails"\n' +
+          '3. Enter bet amount (1-5 points)\n\n' +
+          '**Rules:**\n' +
+          '• Bet 1-5 honor points\n' +
+          '• Win: Double your bet\n' +
+          '• Lose: Lose your bet amount\n' +
+          '• Daily limit: 5 plays per day',
+        inline: false,
+      }
+    )
+    .setFooter({ text: 'Use the buttons in the Honor Pavilion and Honor Arena to interact!' })
+    .setTimestamp();
+
+  await interaction.editReply({ embeds: [embed] });
+}
+
+/**
+ * Handle the status log button interaction — show recent point distributions as ephemeral
+ */
+async function handleStatusLogButton(interaction: ButtonInteraction): Promise<void> {
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  sendBotsLog({
+    botId: 'honorbot-pbz',
+    category: 'status',
+    action: 'view_status_log',
+    userId: interaction.user.id,
+    username: interaction.user.username,
+  });
+
+  const statusLogService = serviceRegistry.getStatusLogService();
+  if (statusLogService) {
+    const embed = statusLogService.generateEphemeralEmbed();
+    await interaction.editReply({ embeds: [embed] });
+  } else {
+    await interaction.editReply({ content: '❌ Status log service is not available. Please try again later.' });
+  }
 }
 
 /**

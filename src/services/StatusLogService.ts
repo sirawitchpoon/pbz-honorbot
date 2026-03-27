@@ -271,6 +271,33 @@ export class StatusLogService {
   }
 
   /**
+   * Build a status log embed suitable for ephemeral replies (no channel message required).
+   */
+  public generateEphemeralEmbed(): EmbedBuilder {
+    let description = '';
+
+    if (this.logEntries.length === 0) {
+      description = '*No point distributions yet.*';
+    } else {
+      for (const entry of this.logEntries) {
+        const timestamp = Math.floor(entry.timestamp.getTime() / 1000);
+        const timeStr = `<t:${timestamp}:T>`;
+        const actionSuffix = entry.action ? ` — ${entry.action}` : '';
+        description += `${timeStr} **${entry.username}** earned **+${entry.points}** points (Current: ${entry.currentCount}/${entry.maxCount})${actionSuffix}\n`;
+      }
+    }
+
+    return new EmbedBuilder()
+      .setColor(0x8b0000)
+      .setTitle('📊 Status Log - Point Distributions')
+      .setDescription(description)
+      .setFooter({
+        text: `Showing last ${this.logEntries.length} distribution${this.logEntries.length !== 1 ? 's' : ''}`,
+      })
+      .setTimestamp();
+  }
+
+  /**
    * Generate the status log embed.
    * Shows how points were earned (e.g. Send message, Daily check-in) instead of cooldown.
    * Entries reloaded from old Discord messages have no action and show no suffix (logs stay intact).
